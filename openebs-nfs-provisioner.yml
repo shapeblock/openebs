@@ -1,0 +1,234 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: openebs-nfs-provisioner-runner
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get"]
+  - apiGroups: ["extensions"]
+    resources: ["podsecuritypolicies"]
+    resourceNames: ["nfs-provisioner"]
+    verbs: ["use"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: openebs-run-nfs-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: openebs-nfs-provisioner
+     # replace with namespace where provisioner is deployed
+    namespace: openebs
+roleRef:
+  kind: ClusterRole
+  name: openebs-nfs-provisioner-runner
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: openebs-leader-locking-nfs-provisioner
+  namespace: openebs
+rules:
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: openebs-leader-locking-nfs-provisioner
+  namespace: openebs
+subjects:
+  - kind: ServiceAccount
+    name: openebs-nfs-provisioner
+roleRef:
+  kind: Role
+  name: openebs-leader-locking-nfs-provisioner
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount # Creating a service account for openebs-nfs-provisioner
+metadata:
+ name: openebs-nfs-provisioner
+ namespace: openebs
+---
+apiVersion: v1
+kind: PersistentVolumeClaim # Creating PVC for openebs-nfs-provisoner to mount on it
+metadata:
+ name: openebspvc
+ namespace: openebs
+spec:
+ storageClassName: openebs-jiva-default
+ accessModes:
+   - ReadWriteOnce
+ resources:
+   requests:
+     storage: "20G"
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass # Creating storage class for applications to point to openebs-nfs-provisioner
+metadata:
+ name: openebs-nfs
+provisioner: openebs.io/nfs 
+parameters:
+ mountOptions: "vers=4.1"  # TODO: reconcile with StorageClass.mountOptions
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+  labels:
+    app: openebs-nfs-provisioner
+  name: openebs-nfs-provisioner
+  namespace: openebs
+spec:
+  ports:
+  - name: nfs
+    port: 2049
+    protocol: TCP
+    targetPort: 2049
+  - name: nfs-udp
+    port: 2049
+    protocol: UDP
+    targetPort: 2049
+  - name: nlockmgr
+    port: 32803
+    protocol: TCP
+    targetPort: 32803
+  - name: nlockmgr-udp
+    port: 32803
+    protocol: UDP
+    targetPort: 32803
+  - name: mountd
+    port: 20048
+    protocol: TCP
+    targetPort: 20048
+  - name: mountd-udp
+    port: 20048
+    protocol: UDP
+    targetPort: 20048
+  - name: rquotad
+    port: 875
+    protocol: TCP
+    targetPort: 875
+  - name: rquotad-udp
+    port: 875
+    protocol: UDP
+    targetPort: 875
+  - name: rpcbind
+    port: 111
+    protocol: TCP
+    targetPort: 111
+  - name: rpcbind-udp
+    port: 111
+    protocol: UDP
+    targetPort: 111
+  - name: statd
+    port: 662
+    protocol: TCP
+    targetPort: 662
+  - name: statd-udp
+    port: 662
+    protocol: UDP
+    targetPort: 662
+  selector:
+    app: openebs-nfs-provisioner
+  type: ClusterIP
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  annotations:
+  name: openebs-nfs-provisioner
+  namespace: openebs
+spec:
+  selector:
+    matchLabels:
+      app: openebs-nfs-provisioner
+  template:
+    metadata:
+      labels:
+        app: openebs-nfs-provisioner
+    spec:
+      serviceAccount: openebs-nfs-provisioner
+      containers:
+      - args:
+        - -provisioner=openebs.io/nfs
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: SERVICE_NAME
+          value: openebs-nfs-provisioner
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        image: quay.io/kubernetes_incubator/nfs-provisioner:latest
+        imagePullPolicy: IfNotPresent
+        name: openebs-nfs-provisioner
+        ports:
+        - containerPort: 2049
+          name: nfs
+          protocol: TCP
+        - containerPort: 2049
+          name: nfs-udp
+          protocol: UDP
+        - containerPort: 32803
+          name: nlockmgr
+          protocol: TCP
+        - containerPort: 32803
+          name: nlockmgr-udp
+          protocol: UDP
+        - containerPort: 20048
+          name: mountd
+          protocol: TCP
+        - containerPort: 20048
+          name: mountd-udp
+          protocol: UDP
+        - containerPort: 875
+          name: rquotad
+          protocol: TCP
+        - containerPort: 875
+          name: rquotad-udp
+          protocol: UDP
+        - containerPort: 111
+          name: rpcbind
+          protocol: TCP
+        - containerPort: 111
+          name: rpcbind-udp
+          protocol: UDP
+        - containerPort: 662
+          name: statd
+          protocol: TCP
+        - containerPort: 662
+          name: statd-udp
+          protocol: UDP
+        securityContext:
+          privileged: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /export
+          name: export-volume
+      volumes:
+      - name: export-volume
+        persistentVolumeClaim:
+          claimName: openebspvc
